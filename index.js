@@ -5,12 +5,20 @@ const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const path = require("path");
 const cors = require("cors");
+const cloudinary = require("cloudinary").v2;
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
 const port = process.env.PORT || 4000;
 
+
+cloudinary.config({
+  cloud_name: "dhhvuzq9u",
+  api_key: "134852419436893",
+  api_secret: "DgZ3kwE1E9YSngZB-ESERnXOri8",
+});
 app.use(express.json());
 app.use(
   cors({
-    origin: "https://ecommerce-bhushan.vercel.app",
+    origin: ["https://ecommerce-bhushan.vercel.app","https://admin-bhushan.vercel.app"],
     credentials: true,
   })
 );
@@ -25,21 +33,37 @@ mongoose.connect(
 
 
 //Image Storage Engine 
-const storage = multer.diskStorage({
-  destination: './upload/images',
-  filename: (req, file, cb) => {
-    return cb(null, `${file.fieldname}_${Date.now()}${path.extname(file.originalname)}`)
-  }
-})
-const upload = multer({ storage: storage })
-app.post("/upload", upload.single('product'), (req, res) => {
+// const storage = multer.diskStorage({
+//   destination: './upload/images',
+//   filename: (req, file, cb) => {
+//     return cb(null, `${file.fieldname}_${Date.now()}${path.extname(file.originalname)}`)
+//   }
+// })
+// const upload = multer({ storage: storage })
+// app.post("/upload", upload.single('product'), (req, res) => {
+//   res.json({
+//     success: 1,
+//     image_url: `/images/${req.file.filename}`
+//   })
+// })
+
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: "images",
+    format: async (req, file) => "png", // You can change the format as per the file type or requirement
+    public_id: (req, file) => `${file.fieldname}_${Date.now()}`,
+  },
+});
+
+const upload = multer({ storage: storage });
+
+app.post("/upload", upload.single("product"), (req, res) => {
   res.json({
     success: 1,
-    image_url: `/images/${req.file.filename}`
-  })
-})
-
-
+    image_url: req.file.path, // Cloudinary returns the URL in `file.path`
+  });
+});
 // Route for Images folder
 app.use('/images', express.static('upload/images'));
 
