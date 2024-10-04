@@ -8,11 +8,13 @@ const cors = require("cors");
 const port = process.env.PORT || 4000;
 
 app.use(express.json());
-app.use(cors());
-// {
-//     origin: "https://ecommerce-bhushan.vercel.app",
-//     credentials: true,
-// }
+app.use(
+  cors({
+    origin: "https://ecommerce-bhushan.vercel.app",
+    credentials: true,
+  })
+);
+
 // Database Connection With MongoDB
 mongoose.connect(
   "mongodb+srv://bhushanpawara25:RR7LRNkWksTt9qL1@cluster0.25dy5jv.mongodb.net/e-commerce"
