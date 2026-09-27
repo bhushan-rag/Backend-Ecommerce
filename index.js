@@ -1,52 +1,56 @@
+require("dotenv").config();
 const express = require("express");
 const app = express();
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
-const path = require("path");
 const cors = require("cors");
 const cloudinary = require("cloudinary").v2;
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
 const port = process.env.PORT || 4000;
 
+// Secrets and connection strings come from environment variables (see .env.example)
+const MONGODB_URI = process.env.MONGODB_URI;
+const JWT_SECRET = process.env.JWT_SECRET;
+const missingEnv = ["MONGODB_URI", "JWT_SECRET", "CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET"]
+  .filter((key) => !process.env[key]);
+if (missingEnv.length > 0) {
+  console.error("Missing required environment variables: " + missingEnv.join(", "));
+  process.exit(1);
+}
 
 cloudinary.config({
-  cloud_name: "dhhvuzq9u",
-  api_key: "134852419436893",
-  api_secret: "DgZ3kwE1E9YSngZB-ESERnXOri8",
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
+
+// Allowed frontend origins, comma separated. Defaults cover the deployed apps and local dev servers.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ||
+  "https://ecommerce-bhushan.vercel.app,https://admin-bhushan.vercel.app,http://localhost:3000,http://localhost:3001")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(express.json());
 app.use(
   cors({
-    origin: ["https://ecommerce-bhushan.vercel.app","https://admin-bhushan.vercel.app"],
+    origin: allowedOrigins,
     credentials: true,
   })
 );
 
 // Database Connection With MongoDB
-mongoose.connect(
-  "mongodb+srv://bhushanpawara25:RR7LRNkWksTt9qL1@cluster0.25dy5jv.mongodb.net/e-commerce"
-);
+mongoose
+  .connect(MONGODB_URI)
+  .then(() => console.log("Connected to MongoDB"))
+  .catch((error) => console.error("MongoDB connection error : ", error.message));
 
-// paste your mongoDB Connection string above with password
-// password should not contain '@' special character
+// Forward errors thrown in async route handlers to the Express error handler
+const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 
-//Image Storage Engine 
-// const storage = multer.diskStorage({
-//   destination: './upload/images',
-//   filename: (req, file, cb) => {
-//     return cb(null, `${file.fieldname}_${Date.now()}${path.extname(file.originalname)}`)
-//   }
-// })
-// const upload = multer({ storage: storage })
-// app.post("/upload", upload.single('product'), (req, res) => {
-//   res.json({
-//     success: 1,
-//     image_url: `/images/${req.file.filename}`
-//   })
-// })
-
+//Image Storage Engine (Cloudinary)
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
@@ -59,23 +63,24 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage: storage });
 
 app.post("/upload", upload.single("product"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ success: 0, errors: "No image uploaded" });
+  }
   res.json({
     success: 1,
     image_url: req.file.path, // Cloudinary returns the URL in `file.path`
   });
 });
-// Route for Images folder
-app.use('/images', express.static('upload/images'));
 
 
 // MiddleWare to fetch user from token
 const fetchuser = async (req, res, next) => {
   const token = req.header("auth-token");
   if (!token) {
-    res.status(401).send({ errors: "Please authenticate using a valid token" });
+    return res.status(401).send({ errors: "Please authenticate using a valid token" });
   }
   try {
-    const data = jwt.verify(token, "secret_ecom");
+    const data = jwt.verify(token, JWT_SECRET);
     req.user = data.user;
     next();
   } catch (error) {
@@ -90,7 +95,7 @@ const Users = mongoose.model("Users", {
   email: { type: String, unique: true },
   password: { type: String },
   cartData: { type: Object },
-  date: { type: Date, default: Date.now() },
+  date: { type: Date, default: Date.now },
 });
 
 
@@ -115,37 +120,31 @@ app.get("/", (req, res) => {
 
 
 // Create an endpoint at ip/login for login the user and giving auth-token
-app.post('/login', async (req, res) => {
+app.post('/login', asyncHandler(async (req, res) => {
   console.log("Login");
   let success = false;
   let user = await Users.findOne({ email: req.body.email });
-  if (user) {
-    const passCompare = req.body.password === user.password;
-    if (passCompare) {
-      const data = {
-        user: {
-          id: user.id
-        }
+  if (user && req.body.password === user.password) {
+    const data = {
+      user: {
+        id: user.id
       }
-      success = true;
-      console.log(user.id);
-      const token = jwt.sign(data, 'secret_ecom');
-      res.json({ success, token });
     }
-    else {
-      return res.status(400).json({ success: success, errors: "please try with correct email/password" })
-    }
+    success = true;
+    const token = jwt.sign(data, JWT_SECRET);
+    return res.json({ success, token });
   }
-  else {
-    return res.status(400).json({ success: success, errors: "please try with correct email/password" })
-  }
-})
+  return res.status(400).json({ success: success, errors: "please try with correct email/password" })
+}))
 
 
 //Create an endpoint at ip/auth for regestring the user & sending auth-token
-app.post('/signup', async (req, res) => {
+app.post('/signup', asyncHandler(async (req, res) => {
   console.log("Sign Up");
   let success = false;
+  if (!req.body.email || !req.body.password) {
+    return res.status(400).json({ success: success, errors: "email and password are required" });
+  }
   let check = await Users.findOne({ email: req.body.email });
   if (check) {
     return res.status(400).json({ success: success, errors: "existing user found with this email" });
@@ -167,88 +166,92 @@ app.post('/signup', async (req, res) => {
     }
   }
 
-  const token = jwt.sign(data, 'secret_ecom');
+  const token = jwt.sign(data, JWT_SECRET);
   success = true;
   res.json({ success, token })
-})
+}))
 
 
 // endpoint for getting all products data
-app.get("/allproducts", async (req, res) => {
+app.get("/allproducts", asyncHandler(async (req, res) => {
   let products = await Product.find({});
   console.log("All Products");
   res.send(products);
-});
+}));
 
 
 // endpoint for getting latest products data
-app.get("/newcollections", async (req, res) => {
+app.get("/newcollections", asyncHandler(async (req, res) => {
   let products = await Product.find({});
-  let arr = products.slice(0).slice(-8);
+  let arr = products.slice(-8);
   console.log("New Collections");
   res.send(arr);
-});
+}));
 
 
 // endpoint for getting womens products data
-app.get("/popularinwomen", async (req, res) => {
+app.get("/popularinwomen", asyncHandler(async (req, res) => {
   let products = await Product.find({ category: "women" });
-  let arr = products.splice(0, 4);
+  let arr = products.slice(0, 4);
   console.log("Popular In Women");
   res.send(arr);
-});
+}));
 
-// endpoint for getting womens products data
-app.post("/relatedproducts", async (req, res) => {
+// endpoint for getting related products data
+app.post("/relatedproducts", asyncHandler(async (req, res) => {
   console.log("Related Products");
-  const {category} = req.body;
+  const { category } = req.body;
   const products = await Product.find({ category });
   const arr = products.slice(0, 4);
   res.send(arr);
-});
+}));
 
 
 // Create an endpoint for saving the product in cart
-app.post('/addtocart', fetchuser, async (req, res) => {
+app.post('/addtocart', fetchuser, asyncHandler(async (req, res) => {
   console.log("Add Cart");
   let userData = await Users.findOne({ _id: req.user.id });
-  userData.cartData[req.body.itemId] += 1;
-  await Users.findOneAndUpdate({ _id: req.user.id }, { cartData: userData.cartData });
+  if (!userData) {
+    return res.status(404).send({ errors: "User not found" });
+  }
+  const cartData = userData.cartData || {};
+  cartData[req.body.itemId] = (cartData[req.body.itemId] || 0) + 1;
+  await Users.findOneAndUpdate({ _id: req.user.id }, { cartData });
   res.send("Added")
-})
+}))
 
 
 // Create an endpoint for removing the product in cart
-app.post('/removefromcart', fetchuser, async (req, res) => {
+app.post('/removefromcart', fetchuser, asyncHandler(async (req, res) => {
   console.log("Remove Cart");
   let userData = await Users.findOne({ _id: req.user.id });
-  if (userData.cartData[req.body.itemId] != 0) {
-    userData.cartData[req.body.itemId] -= 1;
+  if (!userData) {
+    return res.status(404).send({ errors: "User not found" });
   }
-  await Users.findOneAndUpdate({ _id: req.user.id }, { cartData: userData.cartData });
+  const cartData = userData.cartData || {};
+  if (cartData[req.body.itemId] > 0) {
+    cartData[req.body.itemId] -= 1;
+  }
+  await Users.findOneAndUpdate({ _id: req.user.id }, { cartData });
   res.send("Removed");
-})
+}))
 
 
 // Create an endpoint for getting cartdata of user
-app.post('/getcart', fetchuser, async (req, res) => {
+app.post('/getcart', fetchuser, asyncHandler(async (req, res) => {
   console.log("Get Cart");
   let userData = await Users.findOne({ _id: req.user.id });
-  res.json(userData.cartData);
-
-})
+  if (!userData) {
+    return res.status(404).send({ errors: "User not found" });
+  }
+  res.json(userData.cartData || {});
+}))
 
 
 // Create an endpoint for adding products using admin panel
-app.post("/addproduct", async (req, res) => {
-  let products = await Product.find({});
-  let id;
-  if (products.length > 0) {
-    let last_product_array = products.slice(-1);
-    let last_product = last_product_array[0];
-    id = last_product.id + 1;
-  }
-  else { id = 1; }
+app.post("/addproduct", asyncHandler(async (req, res) => {
+  let last_product = await Product.findOne({}).sort({ id: -1 });
+  let id = last_product ? last_product.id + 1 : 1;
   const product = new Product({
     id: id,
     name: req.body.name,
@@ -261,14 +264,21 @@ app.post("/addproduct", async (req, res) => {
   await product.save();
   console.log("Saved");
   res.json({ success: true, name: req.body.name })
-});
+}));
 
 
 // Create an endpoint for removing products using admin panel
-app.post("/removeproduct", async (req, res) => {
+app.post("/removeproduct", asyncHandler(async (req, res) => {
   await Product.findOneAndDelete({ id: req.body.id });
   console.log("Removed");
   res.json({ success: true, name: req.body.name })
+}));
+
+// Error handler: validation errors are the client's fault, everything else is a server error
+app.use((err, req, res, next) => {
+  console.error("Error : ", err.message);
+  const status = err.name === "ValidationError" ? 400 : 500;
+  res.status(status).json({ success: false, errors: err.message });
 });
 
 // Starting Express Server
